@@ -1,50 +1,74 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import Query
+from app.database import collection as account_collection
+from app.models import Account, AccountListResponse
+from app.utils import increment_counter
 from typing import List
 
 router = APIRouter()
 
-class Account(BaseModel):
-    id: int
-    username: str
-    password: str
-    tagLine: str
-    gameName: str
+@router.get("/accounts/", response_model=AccountListResponse, tags=["Account"])
+def read_accounts(
+    skip: int = 0,
+    limit: int = 10,
+    username: str = Query(None),
+    tagLine: str = Query(None),
+    gameName: str = Query(None),
+    accountId: int = Query(None)
+):
+    filters = {}
+    if username:
+        filters["username"] = username
+    if tagLine:
+        filters["tagLine"] = tagLine
+    if gameName:
+        filters["gameName"] = gameName
+    if accountId:
+        filters["_id"] = accountId
+    
+    total_documents = account_collection.count_documents({})
+    total_filtered = account_collection.count_documents(filters)  # Contagem com os filtros
+    
+    accounts = account_collection.find(filters).skip(skip).limit(limit)
+    accounts_list = [
+        Account(**{**acc, "accountId": acc.pop('_id')})
+        for acc in accounts
+    ]
+    
+    response_data = {
+        "data": accounts_list,
+        "total_documents": total_documents,
+        "total_filtered": total_filtered,
+    }
+    return AccountListResponse(**response_data)
 
-database = [
-    Account(id=1, username="user1", password="pass1", tagLine="Tag 1", gameName="Game 1"),
-    Account(id=2, username="user2", password="pass2", tagLine="Tag 2", gameName="Game 2"),
-]
 
-@router.get("/accounts/", response_model=List[Account])
-def read_accounts(skip: int = 0, limit: int = 10):
-    return database[skip : skip + limit]
-
-@router.get("/accounts/{account_id}", response_model=Account)
-def read_account(account_id: int):
-    account = next((acc for acc in database if acc.id == account_id), None)
+@router.get("/accounts/{account_id}", response_model=Account, tags=["Account"])
+def read_account(account_id: str):
+    account = account_collection.find_one({"_id": int(account_id)})
     if account is None:
         raise HTTPException(status_code=404, detail="Conta não encontrada")
     return account
 
-@router.post("/accounts/", response_model=Account)
+@router.post("/accounts/", response_model=Account, tags=["Account"])
 def create_account(account: Account):
-    account.id = len(database) + 1
-    database.append(account)
+    new_id = increment_counter("account_id")  # Obtém um novo ID sequencial
+    account_data = account.dict()
+    account_data["_id"] = new_id  # Atribui o ID sequencial ao campo _id
+    inserted_account = account_collection.insert_one(account_data)
     return account
 
-@router.put("/accounts/{account_id}", response_model=Account)
-def update_account(account_id: int, updated_account: Account):
-    index = next((i for i, acc in enumerate(database) if acc.id == account_id), None)
-    if index is None:
+@router.put("/accounts/{account_id}", response_model=Account, tags=["Account"])
+def update_account(account_id: str, updated_account: Account):
+    updated_account_data = updated_account.dict()
+    result = account_collection.update_one({"_id": int(account_id)}, {"$set": updated_account_data})
+    if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Conta não encontrada")
-    database[index] = updated_account
     return updated_account
 
-@router.delete("/accounts/{account_id}", response_model=Account)
-def delete_account(account_id: int):
-    index = next((i for i, acc in enumerate(database) if acc.id == account_id), None)
-    if index is None:
+@router.delete("/accounts/{account_id}", response_model=Account, tags=["Account"])
+def delete_account(account_id: str):
+    deleted_account = account_collection.find_one_and_delete({"_id": int(account_id)})
+    if deleted_account is None:
         raise HTTPException(status_code=404, detail="Conta não encontrada")
-    deleted_account = database.pop(index)
     return deleted_account
